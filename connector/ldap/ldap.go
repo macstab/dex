@@ -14,6 +14,7 @@ import (
 
 	"github.com/dexidp/dex/connector"
 	"github.com/dexidp/dex/pkg/log"
+	"github.com/dexidp/dex/pkg/roles"
 )
 
 // Config holds the configuration parameters for the LDAP connector. The LDAP
@@ -156,6 +157,23 @@ type Config struct {
 		// The attribute of the group that represents its name.
 		NameAttr string `json:"nameAttr"`
 	} `json:"groupSearch"`
+
+	/*
+		This configuration provides the mapping of any kind of group to a list
+		of roles. By this the groups from multiple connectors may apply a list
+		of roles for the current user. This roles can be added to the token.
+		By this you may use different federations with a different group setup
+		but match them to your distinct user roles.
+		Example:
+		- Group1:
+			- frontend
+		- Group2:
+			- admin
+		- Group3:
+			- frontend
+			- admin
+	*/
+	AppliedRoles map[string][]string `json:"appliedRoles"`
 }
 
 func scopeString(i int) string {
@@ -504,12 +522,24 @@ func (c *ldapConnector) Login(ctx context.Context, s connector.Scopes, username,
 		return connector.Identity{}, false, err
 	}
 
+	var groups []string
+
 	if s.Groups {
-		groups, err := c.groups(ctx, user)
+		groups, err = c.groups(ctx, user)
 		if err != nil {
 			return connector.Identity{}, false, fmt.Errorf("ldap: failed to query groups: %v", err)
 		}
 		ident.Groups = groups
+	}
+
+	if s.Roles {
+		if groups == nil {
+			groups, err = c.groups(ctx, user)
+			if err != nil {
+				return connector.Identity{}, false, fmt.Errorf("ldap: failed to query groups: %v", err)
+			}
+		}
+		roles.ApplyRoles(groups, c.AppliedRoles, &ident)
 	}
 
 	if s.OfflineAccess {
@@ -558,12 +588,24 @@ func (c *ldapConnector) Refresh(ctx context.Context, s connector.Scopes, ident c
 	}
 	newIdent.ConnectorData = ident.ConnectorData
 
+	var groups []string
+
 	if s.Groups {
-		groups, err := c.groups(ctx, user)
+		groups, err = c.groups(ctx, user)
 		if err != nil {
 			return connector.Identity{}, fmt.Errorf("ldap: failed to query groups: %v", err)
 		}
 		newIdent.Groups = groups
+	}
+
+	if s.Roles {
+		if groups == nil {
+			groups, err = c.groups(ctx, user)
+			if err != nil {
+				return connector.Identity{}, fmt.Errorf("ldap: failed to query groups: %v", err)
+			}
+		}
+		roles.ApplyRoles(groups, c.AppliedRoles, &newIdent)
 	}
 	return newIdent, nil
 }
